@@ -13,11 +13,12 @@ st.set_page_config(
     page_title="Máquina territorial | Presidencia 2026",
     layout="wide",
     page_icon="🧭",
+    initial_sidebar_state="expanded",
 )
 
 CUSTOM_CSS = """
 <style>
-.block-container {padding-top: 2.3rem; padding-bottom: 2.2rem; max-width: 1680px;}
+.block-container {padding-top: 3.2rem; padding-bottom: 2.2rem; max-width: 1680px;}
 [data-testid="stSidebar"] {background: linear-gradient(180deg, #0b1220 0%, #111827 100%);}
 [data-testid="stSidebar"] * {color:#f8fafc;}
 .main-title {font-size:2.25rem; line-height:1.12; font-weight:900; letter-spacing:-.04em; margin:0 0 .3rem 0;}
@@ -75,13 +76,8 @@ hr.soft {border:0; border-top:1px solid rgba(148,163,184,.22); margin:18px 0;}
 
 
 /* Oculta franja superior/toolbar de Streamlit que puede tapar títulos */
-header[data-testid="stHeader"] {height:0rem; background:transparent; visibility:hidden;}
-[data-testid="stToolbar"] {display:none !important;}
-[data-testid="stDecoration"] {display:none !important;}
-#MainMenu {visibility:hidden;}
-footer {visibility:hidden;}
-.stDeployButton {display:none !important;}
 
+header[data-testid="stHeader"] {background: rgba(11,15,25,.92);}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
