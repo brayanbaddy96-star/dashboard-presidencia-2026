@@ -568,75 +568,204 @@ def norm_geo_text(value):
     return aliases.get(value, value)
 
 
+
+def geo_clean_municipio_name(value):
+    """Limpia nombres electorales/localidades para cruzarlos con geometrías."""
+    nv = norm_geo_text(value)
+    # Bogotá llega como "ZONA 01 LOCALIDAD 1 USAQUEN"; para geometría interesa "USAQUEN".
+    nv = re.sub(r'^ZONA\s+\d+\s+LOCALIDAD\s+\d+\s+', '', nv)
+    nv = re.sub(r'^LOCALIDAD\s+\d+\s+', '', nv)
+    nv = nv.replace('RAFAEL URIBE URIBE', 'RAFAEL URIBE')
+    nv = nv.replace('CIUDAD BOLIVAR', 'CIUDAD BOLIVAR')
+    return nv.strip()
+
+
+DANE_DEPTO = {
+    'ANTIOQUIA': '05',
+    'ATLANTICO': '08',
+    'BOLIVAR': '13',
+    'BOYACA': '15',
+    'CALDAS': '17',
+    'CAQUETA': '18',
+    'CAUCA': '19',
+    'CESAR': '20',
+    'CORDOBA': '23',
+    'CUNDINAMARCA': '25',
+    'CHOCO': '27',
+    'HUILA': '41',
+    'LA GUAJIRA': '44',
+    'MAGDALENA': '47',
+    'META': '50',
+    'NARINO': '52',
+    'NORTE DE SANTANDER': '54',
+    'QUINDIO': '63',
+    'RISARALDA': '66',
+    'SANTANDER': '68',
+    'SUCRE': '70',
+    'TOLIMA': '73',
+    'VALLE DEL CAUCA': '76',
+    'ARAUCA': '81',
+    'CASANARE': '85',
+    'PUTUMAYO': '86',
+    'ARCHIPIELAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA': '88',
+    'SAN ANDRES': '88',
+    'AMAZONAS': '91',
+    'GUAINIA': '94',
+    'GUAVIARE': '95',
+    'VAUPES': '97',
+    'VICHADA': '99',
+    'BOGOTA': '11',
+}
+
+
+def dane_depto_code(depto_nombre):
+    return DANE_DEPTO.get(norm_geo_text(depto_nombre), '')
+
+
+def dane_mpio_code(depto_nombre, municipio):
+    dep_code = dane_depto_code(depto_nombre)
+    if not dep_code:
+        return ''
+    try:
+        m = int(float(municipio))
+    except Exception:
+        return ''
+    # Localidades de Bogotá tienen códigos artificiales 160001...; no son códigos DANE municipales.
+    if dep_code == '11' and m >= 160000:
+        return ''
+    return f"{dep_code}{m:03d}"
+
+
+
 @st.cache_data(show_spinner=False)
 def load_map_geojson(mode):
-    """Carga GeoJSON de departamentos/municipios desde espejo público. Si falla, el tablero usa centroides."""
-    base = "https://cdn.jsdelivr.net/gh/santiblanko/colombia.geojson@master/"
-    filename = "depto.json" if mode == "departamento" else "mpio.json"
-    url = base + filename
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            raw = response.read().decode("utf-8")
-        return json.loads(raw)
-    except Exception:
-        return None
+    """Carga GeoJSON de departamentos/municipios/localidades. Si falla, el tablero usa centroides."""
+    sources = []
+    if mode == "departamento":
+        sources = ["https://cdn.jsdelivr.net/gh/santiblanko/colombia.geojson@master/depto.json"]
+    elif mode == "bogota_localidades":
+        # Servicio ArcGIS CAR/IDECA: Localidades Bogotá, salida GeoJSON.
+        # Incluye las 20 localidades con polígono; permite cruzar por nombre de localidad.
+        sources = [
+            "https://sig.car.gov.co/arcgis/rest/services/visor/Division_Territorial/FeatureServer/5/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson",
+            "https://raw.githubusercontent.com/nestorandrespe/datos-bogota/master/localidades.geojson",
+            "https://gist.githubusercontent.com/jupaneira/a02af9ac03957aed15939ef72bfecfd2/raw/bta_localidades.json",
+            "https://cdn.jsdelivr.net/gh/santiblanko/colombia.geojson@master/mpio.json",
+        ]
+    else:
+        sources = ["https://cdn.jsdelivr.net/gh/santiblanko/colombia.geojson@master/mpio.json"]
+
+    for url in sources:
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                raw = response.read().decode("utf-8")
+            data = json.loads(raw)
+            # Algunos recursos de Bogotá vienen como TopoJSON; si ocurre, se omiten y se prueba la siguiente fuente.
+            if isinstance(data, dict) and data.get("type") == "FeatureCollection":
+                return data
+        except Exception:
+            continue
+    return None
 
 
 def geo_feature_values(feature):
     props = feature.get('properties', {}) or {}
     values = set()
-    for val in props.values():
+
+    def add_value(val):
         if isinstance(val, (str, int, float)):
             nv = norm_geo_text(val)
             if nv:
                 values.add(nv)
-    # Some GeoJSONs carry id outside properties
+                values.add(geo_clean_municipio_name(nv))
+
+    for key, val in props.items():
+        add_value(val)
+        # También guarda "clave valor" para servicios ArcGIS con campos como LocNombre, Nombre, CODIGO.
+        if isinstance(val, (str, int, float)):
+            add_value(f"{key} {val}")
+
     if feature.get('id') is not None:
-        values.add(norm_geo_text(feature.get('id')))
+        add_value(feature.get('id'))
     return values
 
 
-def feature_matches(values, dept_norm=None, mun_norm=None):
-    def has_token(token):
+
+def feature_matches(values, dept_norm=None, mun_norm=None, dept_code=None, mpio_code=None):
+    """Cruce flexible: primero códigos DANE cuando existan; luego nombres normalizados."""
+    values = set(values or set())
+
+    def has_value(token):
+        if not token:
+            return True
+        token = str(token).strip()
         if not token:
             return True
         if token in values:
             return True
         for v in values:
+            if not v:
+                continue
             if len(token) >= 5 and (token in v or v in token):
                 return True
         return False
 
-    return has_token(dept_norm) and has_token(mun_norm)
+    # Para municipios, el código DANE completo es el cruce más confiable.
+    if mpio_code:
+        mpio_variants = {mpio_code, str(int(mpio_code)) if str(mpio_code).isdigit() else mpio_code}
+        if any(v in values for v in mpio_variants):
+            return True
+
+    # Para departamentos, el código DANE ayuda cuando la geometría no trae nombre.
+    if dept_code and not mun_norm:
+        if dept_code in values or str(int(dept_code)) in values:
+            return True
+
+    return has_value(dept_norm) and has_value(mun_norm)
 
 
-def build_polygon_geojson(map_df, mode):
-    geo = load_map_geojson(mode)
+def build_polygon_geojson(map_df, mode, selected_depto='TODOS'):
+    is_bogota_localidades = (mode == 'municipio' and selected_depto == 'BOGOTA D.C.')
+    geo_mode = 'bogota_localidades' if is_bogota_localidades else mode
+    geo = load_map_geojson(geo_mode)
     if not geo or 'features' not in geo:
         return None, pd.DataFrame(), 0, 0
 
     rows = map_df.copy()
     rows['map_id'] = None
-
-    # For Bogotá localities, national municipal polygons do not represent localidades.
+    rows['dept_norm'] = rows['departamento_nombre'].apply(norm_geo_text)
     if mode == 'municipio':
-        rows = rows[~rows['municipio_nombre'].astype(str).str.contains('LOCALIDAD|ZONA 90|ZONA 98', case=False, na=False)].copy()
+        rows['mun_norm'] = rows['municipio_nombre'].apply(geo_clean_municipio_name)
+    else:
+        rows['mun_norm'] = None
+    rows['dane_depto'] = rows['departamento_nombre'].apply(dane_depto_code)
+    if mode == 'municipio':
+        rows['dane_mpio'] = rows.apply(lambda r: dane_mpio_code(r.get('departamento_nombre'), r.get('municipio')), axis=1)
+    else:
+        rows['dane_mpio'] = ''
 
+    # No excluimos Bogotá: ahora intentamos cruzar localidades por nombre limpio. Si falla, cae a centroides.
     features = geo.get('features', [])
     feature_values = [geo_feature_values(f) for f in features]
     used = set()
     out_features = []
-    matched_ids = []
 
     for idx, row in rows.iterrows():
-        dept_norm = norm_geo_text(row.get('departamento_nombre', ''))
-        mun_norm = None if mode == 'departamento' else norm_geo_text(row.get('municipio_nombre', ''))
+        dept_norm = row.get('dept_norm', '')
+        mun_norm = None if mode == 'departamento' else row.get('mun_norm', '')
+        dept_code = row.get('dane_depto', '')
+        mpio_code = '' if mode == 'departamento' else row.get('dane_mpio', '')
+        # En geometría de localidades de Bogotá el feature no siempre trae "Bogotá" como departamento.
+        if is_bogota_localidades:
+            dept_norm = None
+            dept_code = ''
+            mpio_code = '' 
 
         best_i = None
         for i, vals in enumerate(feature_values):
             if i in used:
                 continue
-            if feature_matches(vals, dept_norm=dept_norm, mun_norm=mun_norm):
+            if feature_matches(vals, dept_norm=dept_norm, mun_norm=mun_norm, dept_code=dept_code, mpio_code=mpio_code):
                 best_i = i
                 break
 
@@ -651,7 +780,6 @@ def build_polygon_geojson(map_df, mode):
             out_features.append(feat)
             used.add(best_i)
             rows.at[idx, 'map_id'] = map_id
-            matched_ids.append(idx)
 
     matched = rows.loc[rows['map_id'].notna()].copy()
     out_geo = {'type': 'FeatureCollection', 'features': out_features}
@@ -664,7 +792,7 @@ def render_force_map(map_df, mode='departamento', selected_depto='TODOS', select
         st.warning("No hay datos para construir el mapa con el filtro actual.")
         return
 
-    geojson, matched, matched_n, total_n = build_polygon_geojson(map_df, mode)
+    geojson, matched, matched_n, total_n = build_polygon_geojson(map_df, mode, selected_depto=selected_depto)
 
     if geojson and matched_n > 0:
         df = matched.copy()
@@ -690,6 +818,8 @@ def render_force_map(map_df, mode='departamento', selected_depto='TODOS', select
             locations=df['map_id'],
             featureidkey='id',
             z=df['winner_code'],
+            zmin=0,
+            zmax=1,
             colorscale=[
                 [0.0, '#f59e0b'], [0.499, '#f59e0b'],
                 [0.5, '#8b5cf6'], [1.0, '#8b5cf6']
@@ -723,7 +853,8 @@ def render_force_map(map_df, mode='departamento', selected_depto='TODOS', select
             title_font=dict(size=17),
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"Mapa poligonal: {fmt_int(matched_n)} de {fmt_int(total_n)} territorios cruzados con geometría. Naranja = Abelardo; morado = Cepeda.")
+        unmatched_n = max(0, total_n - matched_n)
+        st.caption(f"Mapa poligonal: {fmt_int(matched_n)} de {fmt_int(total_n)} territorios cruzados con geometría. Naranja = Abelardo; morado = Cepeda. Sin cruce geométrico: {fmt_int(unmatched_n)}.")
         return
 
     # Fallback: centroides, para no dejar vacío el tablero si la geometría remota no carga.
@@ -799,7 +930,7 @@ def render_force_map(map_df, mode='departamento', selected_depto='TODOS', select
         title_font=dict(size=17),
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("No fue posible cargar el polígono completo; se muestra la vista estable por centroides.")
+    st.caption("No fue posible cargar/cruzar el polígono completo; se muestra la vista estable por centroides. En Bogotá se intenta usar geometría oficial de localidades antes del respaldo por centroides.")
 
 
 # Precalcula los ganadores Abelardo vs Cepeda antes de renderizar los módulos.

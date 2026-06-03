@@ -74,3 +74,13 @@ Se incorporó mapa poligonal para departamentos y municipios usando GeoJSON. Si 
 ## Nota V18
 
 Se corrigió el error `NameError: name 're' is not defined` en el módulo de mapa poligonal.
+
+
+## Nota V19
+
+Se corrigió el color del mapa poligonal, se mejoró el cruce por códigos DANE/nombres normalizados y se intentó habilitar croquis de Bogotá por localidades cuando la geometría externa esté disponible.
+
+
+## Nota V20
+
+Se agregó fuente GeoJSON de localidades de Bogotá desde servicio ArcGIS/IDECA-CAR y se ajustó el cruce para localidades sin exigir nombre de departamento en la geometría.
