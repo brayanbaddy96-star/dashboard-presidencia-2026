@@ -5,6 +5,13 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
+import json
+import re
+import urllib.request
+import unicodedata
+import copy
+import streamlit.components.v1 as components
 
 APP_DIR = Path(__file__).parent
 DATA = APP_DIR / "data"
@@ -475,6 +482,329 @@ ce_votes = nat_base.loc[nat_base['nombre_candidato'].eq(CAND_CE), 'votos'].sum()
 valid_votes = nat_base.loc[nat_base['tipo_registro'].isin(['CANDIDATO', 'VOTO_EN_BLANCO']), 'votos'].sum()
 total_votes = nat_base['votos'].sum()
 
+
+
+def _weighted_centroids(df, keys):
+    """Centroides territoriales calculados desde coordenadas de puestos DIVIPOL."""
+    geo = df.dropna(subset=['latitud', 'longitud']).copy()
+    if geo.empty:
+        return pd.DataFrame(columns=keys + ['latitud', 'longitud'])
+    geo['peso_geo'] = pd.to_numeric(geo.get('votos_validos', 1), errors='coerce').fillna(0)
+    geo.loc[geo['peso_geo'] <= 0, 'peso_geo'] = 1
+    geo['lat_w'] = geo['latitud'] * geo['peso_geo']
+    geo['lon_w'] = geo['longitud'] * geo['peso_geo']
+    out = geo.groupby(keys, as_index=False).agg(
+        lat_w=('lat_w', 'sum'),
+        lon_w=('lon_w', 'sum'),
+        peso_geo=('peso_geo', 'sum')
+    )
+    out['latitud'] = out['lat_w'] / out['peso_geo']
+    out['longitud'] = out['lon_w'] / out['peso_geo']
+    return out[keys + ['latitud', 'longitud']]
+
+
+def build_ab_ce_winner_frames():
+    sub_dep = dep[(dep['tipo_registro'] == 'CANDIDATO') & (dep['nombre_candidato'].isin([CAND_AB, CAND_CE]))].copy()
+    dep_pivot = (
+        sub_dep.pivot_table(
+            index=['departamento', 'departamento_nombre'],
+            columns='nombre_candidato',
+            values='votos',
+            aggfunc='sum',
+            fill_value=0
+        ).reset_index()
+    )
+    dep_pivot['abelardo'] = dep_pivot[CAND_AB] if CAND_AB in dep_pivot.columns else 0
+    dep_pivot['cepeda'] = dep_pivot[CAND_CE] if CAND_CE in dep_pivot.columns else 0
+    dep_pivot['ganador_ab_ce'] = np.where(dep_pivot['abelardo'] >= dep_pivot['cepeda'], CAND_AB, CAND_CE)
+    dep_pivot['margen'] = (dep_pivot['abelardo'] - dep_pivot['cepeda']).abs()
+    dep_pivot['total_ab_ce'] = dep_pivot['abelardo'] + dep_pivot['cepeda']
+
+    sub_mun = mun[(mun['tipo_registro'] == 'CANDIDATO') & (mun['nombre_candidato'].isin([CAND_AB, CAND_CE]))].copy()
+    mun_pivot = (
+        sub_mun.pivot_table(
+            index=['departamento', 'departamento_nombre', 'municipio', 'municipio_nombre'],
+            columns='nombre_candidato',
+            values='votos',
+            aggfunc='sum',
+            fill_value=0
+        ).reset_index()
+    )
+    mun_pivot['abelardo'] = mun_pivot[CAND_AB] if CAND_AB in mun_pivot.columns else 0
+    mun_pivot['cepeda'] = mun_pivot[CAND_CE] if CAND_CE in mun_pivot.columns else 0
+    mun_pivot['ganador_ab_ce'] = np.where(mun_pivot['abelardo'] >= mun_pivot['cepeda'], CAND_AB, CAND_CE)
+    mun_pivot['margen'] = (mun_pivot['abelardo'] - mun_pivot['cepeda']).abs()
+    mun_pivot['total_ab_ce'] = mun_pivot['abelardo'] + mun_pivot['cepeda']
+
+    dep_cent = _weighted_centroids(puestos, ['departamento', 'departamento_nombre'])
+    mun_cent = _weighted_centroids(puestos, ['departamento', 'departamento_nombre', 'municipio', 'municipio_nombre'])
+
+    dep_pivot = dep_pivot.merge(dep_cent, on=['departamento', 'departamento_nombre'], how='left')
+    mun_pivot = mun_pivot.merge(mun_cent, on=['departamento', 'departamento_nombre', 'municipio', 'municipio_nombre'], how='left')
+
+    return dep_pivot, mun_pivot
+
+
+
+
+def norm_geo_text(value):
+    if pd.isna(value):
+        return ''
+    value = str(value).upper().strip()
+    value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
+    value = re.sub(r'[^A-Z0-9]+', ' ', value)
+    value = re.sub(r'\s+', ' ', value).strip()
+    aliases = {
+        'BOGOTA D C': 'BOGOTA',
+        'BOGOTA DC': 'BOGOTA',
+        'SANTAFE DE BOGOTA D C': 'BOGOTA',
+        'SANTA FE DE BOGOTA': 'BOGOTA',
+        'NORTE DE SAN': 'NORTE DE SANTANDER',
+        'NORTE DE SANTANDER': 'NORTE DE SANTANDER',
+        'SAN ANDRES': 'ARCHIPIELAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA',
+        'SAN ANDRES PROVIDENCIA': 'ARCHIPIELAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA',
+        'ARCHIPIELAGO DE SAN ANDRES': 'ARCHIPIELAGO DE SAN ANDRES PROVIDENCIA Y SANTA CATALINA',
+    }
+    return aliases.get(value, value)
+
+
+@st.cache_data(show_spinner=False)
+def load_map_geojson(mode):
+    """Carga GeoJSON de departamentos/municipios desde espejo público. Si falla, el tablero usa centroides."""
+    base = "https://cdn.jsdelivr.net/gh/santiblanko/colombia.geojson@master/"
+    filename = "depto.json" if mode == "departamento" else "mpio.json"
+    url = base + filename
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def geo_feature_values(feature):
+    props = feature.get('properties', {}) or {}
+    values = set()
+    for val in props.values():
+        if isinstance(val, (str, int, float)):
+            nv = norm_geo_text(val)
+            if nv:
+                values.add(nv)
+    # Some GeoJSONs carry id outside properties
+    if feature.get('id') is not None:
+        values.add(norm_geo_text(feature.get('id')))
+    return values
+
+
+def feature_matches(values, dept_norm=None, mun_norm=None):
+    def has_token(token):
+        if not token:
+            return True
+        if token in values:
+            return True
+        for v in values:
+            if len(token) >= 5 and (token in v or v in token):
+                return True
+        return False
+
+    return has_token(dept_norm) and has_token(mun_norm)
+
+
+def build_polygon_geojson(map_df, mode):
+    geo = load_map_geojson(mode)
+    if not geo or 'features' not in geo:
+        return None, pd.DataFrame(), 0, 0
+
+    rows = map_df.copy()
+    rows['map_id'] = None
+
+    # For Bogotá localities, national municipal polygons do not represent localidades.
+    if mode == 'municipio':
+        rows = rows[~rows['municipio_nombre'].astype(str).str.contains('LOCALIDAD|ZONA 90|ZONA 98', case=False, na=False)].copy()
+
+    features = geo.get('features', [])
+    feature_values = [geo_feature_values(f) for f in features]
+    used = set()
+    out_features = []
+    matched_ids = []
+
+    for idx, row in rows.iterrows():
+        dept_norm = norm_geo_text(row.get('departamento_nombre', ''))
+        mun_norm = None if mode == 'departamento' else norm_geo_text(row.get('municipio_nombre', ''))
+
+        best_i = None
+        for i, vals in enumerate(feature_values):
+            if i in used:
+                continue
+            if feature_matches(vals, dept_norm=dept_norm, mun_norm=mun_norm):
+                best_i = i
+                break
+
+        if best_i is not None:
+            map_id = f"{mode}_{len(out_features)}"
+            feat = copy.deepcopy(features[best_i])
+            feat['id'] = map_id
+            feat.setdefault('properties', {})
+            feat['properties']['map_id'] = map_id
+            feat['properties']['ganador'] = 'Cepeda' if row['ganador_ab_ce'] == CAND_CE else 'Abelardo'
+            feat['properties']['territorio'] = row.get('departamento_nombre') if mode == 'departamento' else row.get('municipio_nombre')
+            out_features.append(feat)
+            used.add(best_i)
+            rows.at[idx, 'map_id'] = map_id
+            matched_ids.append(idx)
+
+    matched = rows.loc[rows['map_id'].notna()].copy()
+    out_geo = {'type': 'FeatureCollection', 'features': out_features}
+    return out_geo, matched, len(matched), len(map_df)
+
+
+def render_force_map(map_df, mode='departamento', selected_depto='TODOS', selected_mpio='TODOS', title='Mapa', height=520):
+    """Mapa poligonal. Si no encuentra geometría, usa el mapa estable por centroides."""
+    if map_df is None or map_df.empty:
+        st.warning("No hay datos para construir el mapa con el filtro actual.")
+        return
+
+    geojson, matched, matched_n, total_n = build_polygon_geojson(map_df, mode)
+
+    if geojson and matched_n > 0:
+        df = matched.copy()
+        df['Ganador'] = np.where(df['ganador_ab_ce'].eq(CAND_CE), 'Cepeda', 'Abelardo')
+        df['winner_code'] = np.where(df['ganador_ab_ce'].eq(CAND_CE), 1, 0)
+        df['Territorio'] = df['departamento_nombre'] if mode == 'departamento' else df['municipio_nombre'] + " · " + df['departamento_nombre']
+        df['Votos Abelardo'] = df['abelardo'].round(0).astype(int)
+        df['Votos Cepeda'] = df['cepeda'].round(0).astype(int)
+        df['Margen'] = df['margen'].round(0).astype(int)
+        df['Total Abelardo + Cepeda'] = df['total_ab_ce'].round(0).astype(int)
+
+        custom = np.stack([
+            df['Territorio'].astype(str),
+            df['Ganador'].astype(str),
+            df['Votos Abelardo'],
+            df['Votos Cepeda'],
+            df['Margen'],
+            df['Total Abelardo + Cepeda'],
+        ], axis=-1)
+
+        fig = go.Figure(go.Choropleth(
+            geojson=geojson,
+            locations=df['map_id'],
+            featureidkey='id',
+            z=df['winner_code'],
+            colorscale=[
+                [0.0, '#f59e0b'], [0.499, '#f59e0b'],
+                [0.5, '#8b5cf6'], [1.0, '#8b5cf6']
+            ],
+            marker_line_color='white',
+            marker_line_width=0.7 if mode == 'municipio' else 1.2,
+            showscale=False,
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Ganador: %{customdata[1]}<br>"
+                "Abelardo: %{customdata[2]:,}<br>"
+                "Cepeda: %{customdata[3]:,}<br>"
+                "Margen: %{customdata[4]:,}<br>"
+                "Total A+C: %{customdata[5]:,}<extra></extra>"
+            ),
+        ))
+
+        fig.update_geos(
+            fitbounds='locations',
+            visible=False,
+            projection_type='mercator',
+            bgcolor='rgba(0,0,0,0)'
+        )
+        fig.update_layout(
+            title=title,
+            height=height,
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0, r=0, t=42, b=0),
+            title_font=dict(size=17),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(f"Mapa poligonal: {fmt_int(matched_n)} de {fmt_int(total_n)} territorios cruzados con geometría. Naranja = Abelardo; morado = Cepeda.")
+        return
+
+    # Fallback: centroides, para no dejar vacío el tablero si la geometría remota no carga.
+    df = map_df.dropna(subset=['latitud', 'longitud']).copy()
+    if df.empty:
+        st.warning("No hay geometría ni coordenadas disponibles para construir el mapa territorial.")
+        return
+
+    df['Ganador'] = np.where(df['ganador_ab_ce'].eq(CAND_CE), 'Cepeda', 'Abelardo')
+    df['Votos Abelardo'] = df['abelardo'].round(0).astype(int)
+    df['Votos Cepeda'] = df['cepeda'].round(0).astype(int)
+    df['Margen'] = df['margen'].round(0).astype(int)
+    df['Total Abelardo + Cepeda'] = df['total_ab_ce'].round(0).astype(int)
+    df['Territorio'] = df['departamento_nombre'] if mode == 'departamento' else df['municipio_nombre'] + " · " + df['departamento_nombre']
+
+    color_map = {'Abelardo': '#f59e0b', 'Cepeda': '#8b5cf6'}
+    max_points = 1400 if mode == 'municipio' else 80
+    df_plot = df.sort_values('Total Abelardo + Cepeda', ascending=False).head(max_points).copy()
+
+    fig = px.scatter_geo(
+        df_plot,
+        lat='latitud',
+        lon='longitud',
+        color='Ganador',
+        color_discrete_map=color_map,
+        size='Total Abelardo + Cepeda',
+        size_max=38 if mode == 'departamento' else 13,
+        hover_name='Territorio',
+        hover_data={
+            'Ganador': True,
+            'Votos Abelardo': ':,',
+            'Votos Cepeda': ':,',
+            'Margen': ':,',
+            'Total Abelardo + Cepeda': ':,',
+            'latitud': False,
+            'longitud': False,
+        },
+        title=title + " · vista por centroides",
+    )
+
+    if selected_depto != 'TODOS' and mode == 'municipio':
+        lat_min, lat_max = df_plot['latitud'].min(), df_plot['latitud'].max()
+        lon_min, lon_max = df_plot['longitud'].min(), df_plot['longitud'].max()
+        lat_pad = max(0.35, (lat_max - lat_min) * 0.20)
+        lon_pad = max(0.35, (lon_max - lon_min) * 0.20)
+        lataxis_range = [lat_min - lat_pad, lat_max + lat_pad]
+        lonaxis_range = [lon_min - lon_pad, lon_max + lon_pad]
+    else:
+        lataxis_range = [-5.2, 13.6]
+        lonaxis_range = [-82.5, -66.2]
+
+    fig.update_geos(
+        projection_type='mercator',
+        lataxis_range=lataxis_range,
+        lonaxis_range=lonaxis_range,
+        showland=True,
+        landcolor='#0f172a',
+        showcountries=True,
+        countrycolor='rgba(255,255,255,.38)',
+        showsubunits=True,
+        subunitcolor='rgba(255,255,255,.18)',
+        showocean=True,
+        oceancolor='#020617',
+        showlakes=False,
+        bgcolor='rgba(0,0,0,0)'
+    )
+    fig.update_layout(
+        height=height,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, t=42, b=0),
+        legend_title_text='Ganador',
+        title_font=dict(size=17),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("No fue posible cargar el polígono completo; se muestra la vista estable por centroides.")
+
+
+# Precalcula los ganadores Abelardo vs Cepeda antes de renderizar los módulos.
+dep_force, mun_force = build_ab_ce_winner_frames()
+
 with st.sidebar:
     st.title("🧭 Máquina territorial")
     st.caption("Presidencia 2026 | MMV + DIVIPOL")
@@ -537,7 +867,47 @@ if modulo == "1. Comando nacional":
         ])
         st.caption("Los porcentajes de Abelardo y Cepeda se calculan sobre votos válidos del filtro activo. El margen base es la diferencia antes de simular transferencias.")
 
-        tab1, tab2 = st.tabs(["Ranking del territorio", "Lectura estratégica"])
+        tab1, tab0, tab2 = st.tabs(["Ranking del territorio", "Mapa de fuerzas", "Lectura estratégica"])
+
+        with tab0:
+            action_note("<b>Lectura:</b> el mapa nacional muestra qué departamentos ganan Abelardo o Cepeda; el segundo mapa baja a municipio y se recalcula con el departamento seleccionado.")
+            dep_map_df = dep_force.copy()
+            mun_map_df = mun_force.copy()
+            if depto_filter != 'TODOS':
+                mun_map_df = mun_map_df[mun_map_df['departamento_nombre'] == depto_filter]
+            if mpio_filter != 'TODOS':
+                mun_map_df = mun_map_df[mun_map_df['municipio_nombre'] == mpio_filter]
+
+            cma, cmb, cmc, cmd = st.columns(4)
+            ab_deps = int((dep_map_df['ganador_ab_ce'] == CAND_AB).sum())
+            ce_deps = int((dep_map_df['ganador_ab_ce'] == CAND_CE).sum())
+            ab_muns = int((mun_map_df['ganador_ab_ce'] == CAND_AB).sum()) if not mun_map_df.empty else 0
+            ce_muns = int((mun_map_df['ganador_ab_ce'] == CAND_CE).sum()) if not mun_map_df.empty else 0
+            cma.metric("Deptos ganados por Abelardo", ab_deps)
+            cmb.metric("Deptos ganados por Cepeda", ce_deps)
+            cmc.metric("Municipios / localidades Abelardo", ab_muns)
+            cmd.metric("Municipios / localidades Cepeda", ce_muns)
+
+            render_force_map(
+                dep_map_df,
+                mode='departamento',
+                selected_depto=depto_filter,
+                selected_mpio=mpio_filter,
+                title='Mapa departamental nacional · ganador Abelardo vs Cepeda',
+                height=500
+            )
+
+            title_mun = "Mapa municipal nacional · ganador Abelardo vs Cepeda" if depto_filter == 'TODOS' else f"Mapa municipal / localidades · {depto_filter}"
+            render_force_map(
+                mun_map_df,
+                mode='municipio',
+                selected_depto=depto_filter,
+                selected_mpio=mpio_filter,
+                title=title_mun,
+                height=560
+            )
+            if depto_filter == 'TODOS':
+                st.caption("Sugerencia: selecciona un departamento en el panel lateral para ver un mapa municipal más limpio y operativo.")
         with tab1:
             fig = px.bar(
                 view,

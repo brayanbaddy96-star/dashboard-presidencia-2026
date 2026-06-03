@@ -54,3 +54,23 @@ Se reactivó la barra superior nativa de Streamlit para que el usuario pueda vol
 ## Nota V12
 
 Se corrigió la pestaña de serie histórica para mostrar todas las elecciones del archivo de proyecciones desde marzo de 2006 hasta junio de 2026, no solo mayo/junio de 2026.
+
+
+## Nota V15
+
+Se corrigió la visualización del mapa de fuerzas y se reordenaron las pestañas para mostrar primero el ranking del territorio.
+
+
+## Nota V16
+
+Se reemplazó el mapa de geometrías externas por un mapa estable de centroides territoriales construido con coordenadas de puestos de votación. Se conserva color morado para Cepeda y naranja para Abelardo.
+
+
+## Nota V17
+
+Se incorporó mapa poligonal para departamentos y municipios usando GeoJSON. Si la geometría remota no carga, el tablero conserva un respaldo por centroides.
+
+
+## Nota V18
+
+Se corrigió el error `NameError: name 're' is not defined` en el módulo de mapa poligonal.
