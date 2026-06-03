@@ -1,2 +1,2 @@
-fuente_mmv,total_votos_mmv,votos_validos,filas_mmv,bogota_reorganizada_por_localidad,localidades_bogota
-PRE_MMV_MAX_TODOS 2.csv,23978304,23685329,1479506,True,22
+fuente_mmv,fuente_proyeccion,total_votos_mmv,votos_validos,potencial_divipol,sufragantes_junio_2026_proy,votos_validos_junio_2026_proy,votos_blanco_junio_2026_proy,modelo_transferencia_incluye_blanco
+PRE_MMV_MAX_TODOS 2.csv,PROYECCIONES PRESIDENCIA.xlsx,23978304,23685329,41421973,23451315,23334478,839134,True

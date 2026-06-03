@@ -1,12 +1,12 @@
-candidato,codigo,pct_abelardo_realista,pct_cepeda_realista,pct_fuga_realista,nota,pct_abelardo_conservador,pct_cepeda_conservador,pct_fuga_conservador,pct_abelardo_agresivo,pct_cepeda_agresivo,pct_fuga_agresivo
-PALOMA VALENCIA,11,78,8,14,Apoyo público de Paloma a Abelardo; fricción por posición de Juan Daniel Oviedo.,68,0,32,88,8,4
-SERGIO FAJARDO,12,40,40,20,Centro no disciplinado; base potencialmente partida y con abstención.,30,30,40,40,50,10
-CLAUDIA LOPEZ,2,15,70,15,Descarta a Abelardo; transferencia no necesariamente automática.,5,60,35,15,80,5
-SANTIAGO BOTERO,3,60,25,15,Lectura de prensa sugiere tendencia hacia Abelardo; usuario puede ajustar si hay adhesión contraria.,50,15,35,70,25,5
-MAURICIO LIZCANO,5,15,75,10,Usuario reporta orientación hacia Cepeda; ajustar con confirmaciones públicas.,5,65,30,15,85,0
-MIGUEL URIBE,6,85,5,10,Respaldo de derecha hacia Abelardo.,75,0,25,95,5,0
-SONDRA MACOLLINS,7,40,40,20,Sin señal robusta; base parametrizable.,30,30,40,40,50,10
-ROY BARRERAS,8,10,80,10,Afinidad y reporte de apoyo hacia Cepeda.,0,70,30,10,90,0
-LUIS GILBERTO MURILLO,13,8,82,10,Renuncia/adhesión previa hacia Cepeda.,0,72,28,8,92,0
-CARLOS CAICEDO,9,5,85,10,Renuncia/adhesión previa hacia Cepeda.,0,75,25,5,95,0
-GUSTAVO MATAMORROS,10,45,45,10,Sin señal robusta; base parametrizable.,35,35,30,45,55,0
+candidato,codigo,pct_abelardo_realista,pct_cepeda_realista,pct_blanco_realista,pct_fuga_realista,nota,pct_abelardo_conservador,pct_cepeda_conservador,pct_blanco_conservador,pct_fuga_conservador,pct_abelardo_agresivo,pct_cepeda_agresivo,pct_blanco_agresivo,pct_fuga_agresivo
+PALOMA VALENCIA,11,72,5,12,11,Apoyo público de Paloma a Abelardo; parte de su base puede no migrar al candidato más confrontacional y optar por blanco/fuga.,64.0,0.0,17.0,19.0,80.0,5.0,8.0,7.0
+SERGIO FAJARDO,12,35,35,15,15,Centro no disciplinado; base partida con voto blanco/fuga relevante.,27.0,27.0,20.0,26.0,43.0,35.0,11.0,11.0
+CLAUDIA LOPEZ,2,10,68,12,10,Descarta a Abelardo; transferencia no necesariamente automática.,2.0,60.0,17.0,21.0,10.0,76.0,8.0,6.0
+SANTIAGO BOTERO,3,58,20,10,12,Lectura de prensa sugiere tendencia hacia Abelardo; ajustar si hay adhesión contraria.,50.0,12.0,15.0,23.0,66.0,20.0,6.0,8.0
+MAURICIO LIZCANO,5,10,72,8,10,Usuario reporta orientación hacia Cepeda; ajustar con confirmaciones públicas.,2.0,64.0,13.0,21.0,10.0,80.0,4.0,6.0
+MIGUEL URIBE,6,80,5,8,7,Respaldo de derecha hacia Abelardo; puede existir voto blanco residual.,72.0,0.0,13.0,15.0,88.0,5.0,4.0,3.0
+SONDRA MACOLLINS,7,35,35,15,15,Sin señal robusta; base parametrizable.,27.0,27.0,20.0,26.0,43.0,35.0,11.0,11.0
+ROY BARRERAS,8,5,78,8,9,Afinidad y reporte de apoyo hacia Cepeda.,0.0,70.0,13.0,17.0,5.0,86.0,4.0,5.0
+LUIS GILBERTO MURILLO,13,5,80,8,7,Renuncia/adhesión previa hacia Cepeda.,0.0,72.0,13.0,15.0,5.0,88.0,4.0,3.0
+CARLOS CAICEDO,9,4,83,7,6,Renuncia/adhesión previa hacia Cepeda.,0.0,75.0,12.0,13.0,4.0,91.0,3.0,2.0
+GUSTAVO MATAMORROS,10,40,40,10,10,Sin señal robusta; base parametrizable.,32.0,32.0,15.0,21.0,48.0,40.0,6.0,6.0
